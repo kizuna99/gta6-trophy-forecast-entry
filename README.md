@@ -1,53 +1,55 @@
-# GTA VI Trophy Rarity Forecaster — merged entry
+# GTA VI Trophy Rarity Forecaster
 
-Entry for make.fun **gta6-trophy-rarity-forecast-01**: forecast every GTA VI
-PS5 trophy's Exophase earn rate at 2026-11-26T00:00:00Z, as five quantiles
-per trophy, from the case's history of house reads. Python 3.13, standard
-library only, deterministic (repeat runs byte-identical), ~0.1 s per case.
+Entry for make.fun competition `gta6-trophy-rarity-forecast-01`: forecast,
+for every PlayStation 5 trophy of Grand Theft Auto VI, its earn rate on
+Exophase at the case target, as five quantiles (0.05, 0.25, 0.5, 0.75, 0.95)
+scored by mean pinball loss on the logit scale.
 
-## Architecture: two engines, one blend
+## Run
 
-**Engine 1 — hurdle-Poisson / log-time (v3).** Collapses the history to
-distinct page states. For a single frozen state it projects the pending
-refresh with a hurdle-Poisson earners law (a large share of trophies gain
-no earners across a refresh; growth concentrates in already-common
-trophies). For rich histories it fits earners growth in log-time with
-shrinkage toward the aggregate slope. Its medians measured sharp (the
-family's official practice loss was 0.173), but its intervals measured
-far too narrow (official practice coverage_90 0.418), so every row is
-recalibrated in logit space: deviations from the median are rescaled by
-per-path asymmetric factors with a sigma floor.
+```sh
+MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
+```
 
-**Engine 2 — two-driver logit (v6).** Per-trophy logit-rate fits against
-dilution (ln players) and progression (ln hours), ridge-shrunk toward the
-pooled fit, with a backtested player projection, a count-consistency
-clamp (implied earners never below observed earners) and a spread built
-from horizon, fit residuals and refresh-lag range. Its medians track
-violent growth regimes where engine 1 lags.
+Python 3.13, standard library only, no network, deterministic: the same
+input always produces byte-identical output. With no environment variables
+set it reads `/input` and writes `/output`, as the grader runs it.
 
-**Blend.** Median = equal logit-average of the two engines' medians.
-Spread = per-side maximum of engine 1's recalibrated deviation and
-0.9 × engine 2's deviation, so each row inherits whichever engine is
-more cautious on that side.
+## Model
 
-## Validation (simulations, not official scores)
+Three layers, all deterministic:
 
-On neutral synthetic worlds generated from the real opening state and
-refresh anchors (hurdle and smooth structures × final and practice case
-shapes, 6 seeds each), and on two independent violent-growth suites, this
-blend is the only candidate of the three (engine 1, engine 2, blend) that
-clears the house persistence baseline in **every** final-shaped cell:
+1. **Hurdle-Poisson count core.** Each trophy's earner count is recovered
+   from the last read (`rate * players_tracked / 100`). The tracked pool
+   and the earner counts are projected to the target from the case
+   history: log-growth extrapolation, damped (pool 0.55, growth 0.60) and
+   capped (pool x5, growth x8), with per-trophy growth shrunk 50% toward
+   the global earners growth. When the history is frozen (the page never
+   refreshed in the window), the pool jumps to a prior of 4,200 tracked
+   players and earners grow by a prior 15%, faded by saturation
+   `(1 - rate/100)^0.5`. New earners are hurdle-Poisson: with probability
+   0.18 a trophy gains none; otherwise the increment is Poisson. The
+   core's median and spread come from that mixture.
 
-- neutral hurdle-final 0.239 vs house 0.234 (statistical tie), smooth-final 0.251 vs 0.276
-- neutral practice cells 0.331 / 0.337 vs house 1.216 / 0.921
-- violent-growth suites: final cells 0.67–1.60 vs house ~1.36–1.93
+2. **Two-driver logit component.** The same pool factor and growth factor
+   drive a direct forecast of the rate (both driver weights 1.0, growth
+   faded by saturation), with no hurdle.
 
-Coverage of the 90% band on the neutral worlds: 0.93–1.00. The official
-score is decided by the server on the final case; no simulation here is
-an official result.
+3. **Quantile blend layer.** The final median logit is a blend of the two
+   components (driver weight 0.28) in logit space. The spread combines
+   base (0.07), growth (0.145), pool (0.145, scaled by a discrete pool
+   fan of 0.94 / 1.00 / 1.10 at probabilities 0.25 / 0.50 / 0.25) and
+   count (0.175) terms in quadrature, scaled by a damped horizon factor.
+   (Spread scales were narrowed from the 0.12 / 0.25 / 0.25 / 0.28
+   starting set after dev-suite measurement: wider spreads scored
+   worse, narrower ones traded mean gains for worse worst cases; the
+   values above are the robust middle.)
+   Quantiles are `sigmoid(blended_logit + z_tau * sigma)`.
 
-## Layout
+A trophy whose last rate is 100% is pinned to `[99.9, 100, 100, 100, 100]`.
 
-- `main.py` — the whole entry (engine 2 is embedded and run in its own
-  namespace to keep the two engines' helpers apart).
+## Files
+
+- `main.py` — the entrypoint.
+- `.makefun/owner.json` — payout wallet declaration.
 - `LICENSE` — MIT.
