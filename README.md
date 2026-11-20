@@ -2,58 +2,52 @@
 [![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/kizuna99/gta6-trophy-forecast-entry/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 [![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/kizuna99/gta6-trophy-forecast-entry/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 
-# GTA VI Trophy Rarity Forecaster
+# GTA VI Trophy Rarity Forecast — hybrid v4 entry
 
-Entry for make.fun competition `gta6-trophy-rarity-forecast-01`: forecast,
-for every PlayStation 5 trophy of Grand Theft Auto VI, its earn rate on
-Exophase at the case target, as five quantiles (0.05, 0.25, 0.5, 0.75, 0.95)
-scored by mean pinball loss on the logit scale.
+Forecasts, for every PlayStation 5 trophy of Grand Theft Auto VI, five
+quantiles (5%, 25%, 50%, 75%, 95%) of its Exophase earn rate at a case's
+target time. Scored by mean pinball loss on the logit scale.
 
-## Run
+## How it works
+
+The case history is first collapsed into **distinct snapshots**
+(consecutive reads with identical `players_tracked` and identical
+`rates` count once). Two regimes follow:
+
+**Single snapshot (frozen page).** The history shows one unchanged
+page, so the forecast is about the next Exophase refresh (assumed
+cadence 280 minutes). If no refresh can land in the forecast window,
+the last page is carried as-is with a narrow logit spread
+(sigma 0.05). Otherwise earners are recovered as integers (rounding,
+then reconciled against the page's trophies-earned total by fractional
+parts), the tracked pool is projected one refresh ahead with an hourly
+growth rate of `0.386 * exp(-age_hours/48)`, and each trophy's new
+earners follow a **hurdle-Poisson** law: with probability 0.10 the
+count is unchanged, otherwise it grows by `Poisson(0.016 * e**2.5)`
+(capped by the projected pool). Quantiles are read off the exact
+discrete CDF by interpolation in logit space, widened asymmetrically
+(+0.16 sigma below the median, +0.08 above), and then **shrunk around
+their own median** by the calibration factor `CAL` in `main.py` —
+the median keeps the sharp single-snapshot centre while the spread is
+narrowed to hold roughly 0.88–0.92 coverage instead of over-covering.
+
+**Multiple snapshots.** Counts (pool, total earners, per-trophy
+earners) are fit by least squares against `ln(1 + hours/8)`, damped by
+`span/(span+dx)`, and extrapolated to the last refresh at or before
+the target. Per-trophy slopes are shrunk toward the trophy's share of
+the total slope. The spread is a symmetric logit sigma derived from
+the fit residuals, capped at 0.35.
+
+## Running
 
 ```sh
 MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-Python 3.13, standard library only, no network, deterministic: the same
-input always produces byte-identical output. With no environment variables
-set it reads `/input` and writes `/output`, as the grader runs it.
+Reads every `*.in` case in the input directory and writes one
+`<id>.out` per case. Python 3 standard library only, no network,
+fully deterministic (two runs are byte-identical).
 
-## Model
+## License
 
-Three layers, all deterministic:
-
-1. **Hurdle-Poisson count core.** Each trophy's earner count is recovered
-   from the last read (`rate * players_tracked / 100`). The tracked pool
-   and the earner counts are projected to the target from the case
-   history: log-growth extrapolation, damped (pool 0.55, growth 0.60) and
-   capped (pool x5, growth x8), with per-trophy growth shrunk 50% toward
-   the global earners growth. When the history is frozen (the page never
-   refreshed in the window), the pool jumps to a prior of 4,200 tracked
-   players and earners grow by a prior 15%, faded by saturation
-   `(1 - rate/100)^0.5`. New earners are hurdle-Poisson: with probability
-   0.18 a trophy gains none; otherwise the increment is Poisson. The
-   core's median and spread come from that mixture.
-
-2. **Two-driver logit component.** The same pool factor and growth factor
-   drive a direct forecast of the rate (both driver weights 1.0, growth
-   faded by saturation), with no hurdle.
-
-3. **Quantile blend layer.** The final median logit is a blend of the two
-   components (driver weight 0.28) in logit space. The spread combines
-   base (0.07), growth (0.145), pool (0.145, scaled by a discrete pool
-   fan of 0.94 / 1.00 / 1.10 at probabilities 0.25 / 0.50 / 0.25) and
-   count (0.175) terms in quadrature, scaled by a damped horizon factor.
-   (Spread scales were narrowed from the 0.12 / 0.25 / 0.25 / 0.28
-   starting set after dev-suite measurement: wider spreads scored
-   worse, narrower ones traded mean gains for worse worst cases; the
-   values above are the robust middle.)
-   Quantiles are `sigmoid(blended_logit + z_tau * sigma)`.
-
-A trophy whose last rate is 100% is pinned to `[99.9, 100, 100, 100, 100]`.
-
-## Files
-
-- `main.py` — the entrypoint.
-- `.makefun/owner.json` — payout wallet declaration.
-- `LICENSE` — MIT.
+MIT — see `LICENSE`.
